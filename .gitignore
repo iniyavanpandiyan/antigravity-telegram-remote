@@ -1,0 +1,21 @@
+# secrets & config
+config.json
+*.token
+.env
+.env.*
+
+# sqlite db + wal/shm/bak (session & bridge state)
+*.db
+*.db-wal
+*.db-shm
+*.db.bak.*
+bridge.db
+sessions.db
+
+# python caches
+__pycache__/
+*.pyc
+
+# misc
+update-check.json
+media/

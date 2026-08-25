@@ -24,7 +24,7 @@ from collections import Counter
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from _preview import ide_preview
+from ide_preview import ide_preview
 
 def import_reply(name, ide_id):
     """Concise success note for an IDE import (no long context dump)."""

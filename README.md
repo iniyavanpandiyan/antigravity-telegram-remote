@@ -187,16 +187,17 @@ never persisted to the DB. The bridge captures those deltas in memory (`reasonin
 ### Tests
 
 ```bash
-python3 _render_test.py
+python3 test_render.py
 ```
 
-Expected: **75/75 green** (`_render_test.py` covers the markdown/HTML rendering helpers —
-`_md_send` / `_md_edit` and the `_html_safe_chunks` / table handling).
+Expected: **75/75 green** (`test_render.py` covers the markdown/HTML rendering helpers —
+`_md_send` / `_md_edit` and the `_html_safe_chunks` / table handling). It `import`s `bot`
+directly, so run it from the repo root.
 
 ### Lint / compile
 
 ```bash
-python3 -m py_compile bot.py
+python3 -m py_compile bot.py ide_preview.py
 ```
 
 ---
@@ -232,11 +233,12 @@ re-run `/pin` in that chat.
 
 | File | Purpose |
 |---|---|
-| `bot.py` | The bridge (entry point). ~2,900 lines. |
+| `bot.py` | The bridge (entry point, run by the systemd service). ~2,900 lines. |
+| `ide_preview.py` | IDE-session preview helper (`ide_preview`), imported by `bot.py`. |
+| `test_render.py` | Test suite for the markdown/HTML render helpers (75 cases). |
+| `requirements.txt` | Python dependencies (`requests`). |
 | `config.json` | Configuration — your bot token. **Git-ignored.** |
 | `antigravity.db` | Bridge state (SQLite). **Git-ignored.** |
-| `_render_test.py` | Test suite for the markdown/HTML render helpers (75 cases). |
-| `_*.py` | One-off diagnostic / probe scripts (not part of the bridge runtime). |
 | `.gitignore` | Excludes secrets, DBs, caches from git. |
 
 ---

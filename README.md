@@ -124,7 +124,30 @@ These are registered via `setMyCommands` so they appear in the bot's `/` menu:
 | `/workspace` | Show or pick the session workspace dir |
 | `/history` | Show your last 5 messages + the bot's replies |
 | `/effort` | Set reasoning effort: low / medium / high |
+| `/steer` | Guide the **running** turn without killing it (queued to run right after) |
+| `/abort` | Kill the running turn (alias: `/stop`) |
+| `/credits` | Show the **G1** credit balance; `/credits on\|off` spends credits once quota hits 0 |
 | `/pin` | Pin the live status message |
+
+`/quota` and `/usage` were dropped from the menu: they reported the same number twice.
+The pinned message now carries a persistent quota dashboard instead — 5-hour **and**
+weekly limits for both the Google (Gemini) group and the third-party (Claude/GPT) group,
+plus the credit state — refreshed every 5 minutes in the background. `/quota` and
+`/usage` still work as typed aliases if you have them in muscle memory.
+
+### The pinned message
+
+The pin is the always-on dashboard. It shows:
+
+* **Run state** — `⏳ running <n>s`, `⚠️ stalled` (no output for 45s+),
+  `✅ done · <n>s · <n> tools · <n> files edited`, `❌ failed`, `🛑 aborted`, or `🟢 idle`.
+* **Quota** — 5h + weekly for Gemini and for Claude/GPT, with reset countdowns.
+* **Credits** — balance of the **G1** pool (`agy /credits`) and whether it is
+  enabled. Note this is *not* the balance the IDE shows under
+  Settings → Models; that is a separate pool (`CreditsProto`) the CLI cannot read.
+* Session model/workspace, context tokens and system load.
+
+So you can tell whether a turn is alive, stuck, or finished without sending anything.
 
 ---
 
@@ -190,8 +213,9 @@ never persisted to the DB. The bridge captures those deltas in memory (`reasonin
 python3 test_render.py
 ```
 
-Expected: **75/75 green** (`test_render.py` covers the markdown/HTML rendering helpers —
-`_md_send` / `_md_edit` and the `_html_safe_chunks` / table handling). It `import`s `bot`
+Expected: **140/140 green** (`test_render.py` covers the markdown/HTML rendering helpers —
+`_md_send` / `_md_edit`, the `_html_safe_chunks` / table handling — plus the quota
+dashboard, run-state line, `/steer` queue and the abort path). It `import`s `bot`
 directly, so run it from the repo root.
 
 ### Lint / compile
@@ -235,7 +259,7 @@ re-run `/pin` in that chat.
 |---|---|
 | `bot.py` | The bridge (entry point, run by the systemd service). ~2,900 lines. |
 | `ide_preview.py` | IDE-session preview helper (`ide_preview`), imported by `bot.py`. |
-| `test_render.py` | Test suite for the markdown/HTML render helpers (75 cases). |
+| `test_render.py` | Test suite for the render/forward/feature paths (140 cases). |
 | `requirements.txt` | Python dependencies (`requests`). |
 | `config.json` | Configuration — your bot token. **Git-ignored.** |
 | `antigravity.db` | Bridge state (SQLite). **Git-ignored.** |

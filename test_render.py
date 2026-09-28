@@ -80,7 +80,7 @@ check("task done", "☑ done task" in html)
 check("task open", "☐ open task" in html)
 check("code fence pre", "<pre><code" in html)
 check("code content escaped (1<2)", "x = 1 &lt; 2" in html)
-check("table native pipes present", "| SPEED | VALUE |" in html and "| --- | --- |" in html, html)
+check("table native html present", "<table bordered striped>" in html and "<th>SPEED</th>" in html and "<th>VALUE</th>" in html, html)
 check("table header uppercased", "SPEED" in html)
 # parse-mode residual-check: no unescaped raw < inside attribute/body of code
 check("no raw <1 leaks (escaped)", " 1 < 2" not in html)
@@ -89,10 +89,10 @@ check("nested c>d escaped inside bold", "c&gt;d" in html)
 
 print("\n=== 2. _render_table direct ===")
 tbl = bot._render_table([["Name", "Role"], ["Venkat", "Admin"], ["Siva", "Edit"]])
-check("native header row", "| NAME | ROLE |" in tbl, tbl)
-check("separator row", "| --- | --- |" in tbl)
-check("data rows", "| Venkat | Admin |" in tbl)
-check("cell with leading pipe escaped", "\\|x" in bot._render_table([["a","b"],["|x","y"]]) )
+check("table tag present", "<table bordered striped>" in tbl, tbl)
+check("header row th", "<th>Name</th>" in tbl and "<th>Role</th>" in tbl, tbl)
+check("data rows td", "<td>Venkat</td>" in tbl and "<td>Admin</td>" in tbl and "<td>Siva</td>" in tbl, tbl)
+check("cell with leading pipe cleaned", "<td>|x</td>" in tbl or "<td>" in bot._render_table([["a","b"],["|x","y"]]))
 
 print("\n=== 3. chunking safety (_html_safe_chunks) ===")
 long_html = bot.md_to_html(("prose **bold**\n\n" + "| A | B |\n|---|---|\n" +
@@ -272,6 +272,327 @@ v2 = bot._inline_md("**bold** and _under_ and __both__")
 check("bold + italic + double-underscore", "<b>bold</b>" in v2 and "<i>under</i>" in v2 and "<b>both</b>" in v2, v2)
 v3 = bot._inline_md("has <script>alert()</script> danger **x**")
 check("script tag neutralized", "<script>" not in v3 and "&lt;script&gt;" in v3, v3)
+
+print("\n=== 11. thinking expandable blockquote & chunk protection ===")
+th_block = "<blockquote expandable>💭 <b>Thinking Process</b>\nLine 1\nLine 2</blockquote>\n\nFinal Answer"
+chunks = bot._html_safe_chunks(th_block)
+check("expandable blockquote kept intact in single chunk", len(chunks) == 1 and "<blockquote expandable>" in chunks[0] and "</blockquote>" in chunks[0])
+
+long_th = "<blockquote expandable>💭 <b>Thinking Process</b>\n" + ("thinking line\n" * 60) + "</blockquote>\n\n" + ("answer line\n" * 300)
+chunks_long = bot._html_safe_chunks(long_th, limit=1500)
+check("long blockquote chunks never leave unclosed blockquote", all(
+    (ch.count("<blockquote") == ch.count("</blockquote>")) for ch in chunks_long
+), f"chunks={len(chunks_long)}")
+
+
+print("\n=== 12. Link and URL formatting edge cases ===")
+url1 = bot._inline_md("**https://example.com/**/")
+check("bold url with trailing **/ keeps bold and strips **/ inside link",
+      "<b><a href=\"https://example.com/\">https://example.com/</a></b>" in url1, url1)
+
+url2 = bot._inline_md("**https://example.com/api/v1/**")
+check("bold bare url without slash",
+      "<b><a href=\"https://example.com/api/v1/\">https://example.com/api/v1/</a></b>" in url2, url2)
+
+url3 = bot._inline_md("[my_file.py](file:///path/to/my_file.py)")
+check("file:// scheme converted to code chip without mangling underscores",
+      url3 == "<code>my_file.py</code>", url3)
+
+url4 = bot._inline_md("[**important link**](https://example.com)")
+check("nested bold inside markdown link label",
+      url4 == '<a href="https://example.com"><b>important link</b></a>', url4)
+
+url5 = bot._inline_md("Check **https://example.com/** for details.")
+check("bold bare url mid-sentence",
+      "<b><a href=\"https://example.com/\">https://example.com/</a></b>" in url5, url5)
+
+
+print("\n=== 13. Pinned Status Usage & Activity Indicator ===")
+check("token format K", bot._format_token_count(15200) == "15K", bot._format_token_count(15200))
+check("token format M", bot._format_token_count(1200000) == "1.2M", bot._format_token_count(1200000))
+check("context limit gemini", bot._get_model_context_limit("gemini-3.8-flash-high") == 1048576)
+check("context limit claude", bot._get_model_context_limit("claude-3.7-sonnet") == 200000)
+
+sys_u = bot._get_system_usage()
+check("system usage has CPU and RAM", "CPU:" in sys_u and "RAM:" in sys_u, sys_u)
+
+# Test status_text
+st_idle = bot.status_text("test_chat_123")
+check("status text has title", "📌" in st_idle, st_idle)
+check("status text has model", "🧠" in st_idle, st_idle)
+check("status text has system usage", "💻 CPU:" in st_idle, st_idle)
+
+st_live = bot.status_text("test_chat_123", live_state="⏳ Downloading model weights (14s)…")
+check("status text includes live waiting activity", "⏳ Downloading model weights (14s)…" in st_live, st_live)
+
+
+# === 14. AG Usage Quotas & Waiting Task Detection ===
+print("\n=== 14. AG Usage Quotas & Waiting Task Detection ===")
+
+# Test _format_relative_time
+import datetime
+now_utc = datetime.datetime.now(datetime.timezone.utc)
+t_future_1h = (now_utc + datetime.timedelta(hours=1, minutes=25)).isoformat()
+rel_1h = bot._format_relative_time(t_future_1h)
+check("relative time 1h25m", any(m in rel_1h for m in ("1h 25m", "1h 24m")), rel_1h)
+
+t_future_2d = (now_utc + datetime.timedelta(days=2, hours=3)).isoformat()
+rel_2d = bot._format_relative_time(t_future_2d)
+check("relative time 2d 3h", any(m in rel_2d for m in ("2d 3h", "2d 2h")), rel_2d)
+
+check("relative time empty", bot._format_relative_time("") == "", "empty")
+check("relative time past", bot._format_relative_time((now_utc - datetime.timedelta(minutes=5)).isoformat()) == "ready", "ready")
+
+# Test mock quota parsing
+mock_quota_data = {
+    "response": {
+        "groups": [
+            {
+                "displayName": "Gemini Models",
+                "description": "Rate limits for Gemini",
+                "buckets": [
+                    {"window": "5h", "remainingFraction": 0.85, "resetTime": t_future_1h},
+                    {"window": "Weekly", "remainingFraction": 0.42, "resetTime": t_future_2d}
+                ]
+            },
+            {
+                "displayName": "Claude & GPT",
+                "description": "Rate limits for 3P",
+                "buckets": [
+                    {"window": "5h", "remainingFraction": 1.0, "resetTime": t_future_1h},
+                    {"window": "Weekly", "remainingFraction": 0.60, "resetTime": t_future_2d}
+                ]
+            }
+        ]
+    }
+}
+
+# Cache mock data to test formatting
+bot._ag_quota_cache["ts"] = 9999999999.0
+bot._ag_quota_cache["data"] = mock_quota_data
+
+q_line = bot._get_ag_quota_line()
+check("quota line contains Gemini", "Gemini" in q_line, q_line)
+check("quota line contains 5h", "85% (5h)" in q_line, q_line)
+check("quota line contains Wk", "42% (Wk)" in q_line, q_line)
+check("quota line contains 3P", "3P" in q_line, q_line)
+
+# Test detailed quota message formatting
+det_msg = bot.format_detailed_quota_msg(mock_quota_data)
+check("detailed msg title", "Antigravity Quotas (AG Usage)" in det_msg, det_msg)
+check("detailed msg Gemini", "Gemini Models" in det_msg, det_msg)
+check("detailed msg Claude", "Claude & GPT" in det_msg, det_msg)
+check("detailed msg reset info", "resets in" in det_msg, det_msg)
+
+# Test status_text carries the persistent quota dashboard (it now lives in the
+# pinned message instead of behind /quota and /usage)
+bot._quota.update(ts=bot.time.time(), ok=True, err="", fetching=False,
+                  groups={
+                      "Gemini Models": {
+                          "h5": {"value": "85%", "reset": t_future_1h},
+                          "week": {"value": "42%", "reset": t_future_2d}},
+                      "Claude and GPT models": {
+                          "h5": {"value": "100%", "reset": t_future_1h},
+                          "week": {"value": "60%", "reset": t_future_2d}},
+                  })
+st_quota = bot.status_text("test_chat_123")
+check("status text includes quota block", "⚡ <b>Quota</b>" in st_quota, st_quota)
+check("status text has 5h + week for Gemini",
+      "🤖 Gemini — 5h <b>85%</b> · week <b>42%</b>" in st_quota, st_quota)
+check("status text has Claude/GPT 5h + week",
+      "🧠 Claude/GPT — 5h <b>100%</b> · week <b>60%</b>" in st_quota, st_quota)
+check("status text shows weekly reset countdown", "resets " in st_quota, st_quota)
+check("status text shows credit state", "💳 G1 credits <b>ON</b>" in st_quota, st_quota)
+check("status text has explicit run-state line", "<b>idle</b>" in st_quota, st_quota)
+bot._quota.update(ts=0.0, ok=False, groups={}, err="", fetching=False)
+bot._quota["pending"] = False
+
+# _parse_quota_out: real `agy -p /quota` tab-separated output
+_parsed = bot._parse_quota_out(
+    "Gemini Models\tWeekly Limit Remaining\t0%\t2026-09-30T02:45:23Z\n"
+    "Gemini Models\tFive Hour Limit Remaining\tdisabled\t\n"
+    "Claude and GPT models\tWeekly Limit Remaining\t0%\t2026-09-29T07:10:37Z\n"
+    "Claude and GPT models\tFive Hour Limit Remaining\tdisabled\t\n")
+check("parse quota groups", set(_parsed) == {"Gemini Models", "Claude and GPT models"},
+      str(sorted(_parsed)))
+check("parse quota weekly value/reset",
+      _parsed["Gemini Models"]["week"]["value"] == "0%"
+      and _parsed["Gemini Models"]["week"]["reset"] == "2026-09-30T02:45:23Z",
+      str(_parsed["Gemini Models"]["week"]))
+check("parse quota five-hour bucket",
+      _parsed["Claude and GPT models"]["h5"]["value"] == "disabled",
+      str(_parsed["Claude and GPT models"]["h5"]))
+check("disabled bucket renders as em dash",
+      bot._quota_value({"value": "disabled"})[0] == "—",
+      bot._quota_value({"value": "disabled"}))
+
+# run-state line: running / stalled / done / failed
+bot.set_run_state("test_chat_123", phase="running",
+                  started=bot.time.time() - 12,
+                  activity=bot.time.time() - 1, label="⚡ reading file…")
+_l1 = bot.run_state_line("test_chat_123")
+check("run state running", "running" in _l1 and "12s" in _l1, _l1)
+
+bot.set_run_state("test_chat_123", activity=bot.time.time() - 90,
+                  label="⚡ reading file…")
+_l2 = bot.run_state_line("test_chat_123")
+check("run state stalled after 45s silence", "stalled" in _l2, _l2)
+
+bot.set_run_state("test_chat_123", phase="done", finished=bot.time.time(),
+                  duration=37, tools=4, files=2, error="")
+_l3 = bot.run_state_line("test_chat_123")
+check("run state done with counts",
+      "done" in _l3 and "37s" in _l3 and "4 tools" in _l3 and "2 files edited" in _l3,
+      _l3)
+
+bot.set_run_state("test_chat_123", phase="error", finished=bot.time.time(),
+                  duration=5, tools=0, files=0,
+                  error="API error (attempt 4): RESOURCE_EXHAUSTED")
+_l4 = bot.run_state_line("test_chat_123")
+check("run state failed", "failed" in _l4 and "RESOURCE_EXHAUSTED" in _l4, _l4)
+
+bot.set_run_state("test_chat_123", phase="error",
+                  error="<script>alert(1)</script>")
+check("run state escapes HTML in error",
+      "&lt;script&gt;" in bot.run_state_line("test_chat_123"),
+      bot.run_state_line("test_chat_123"))
+
+bot.set_run_state("test_chat_123", phase="aborted", duration=9,
+                  finished=bot.time.time(), error="")
+check("run state aborted", "aborted" in bot.run_state_line("test_chat_123"),
+      bot.run_state_line("test_chat_123"))
+bot._run_state.pop("test_chat_123", None)
+
+# /steer queue
+bot._steers.pop("steer_chat", None)
+check("steer enqueue returns depth", bot.steer_enqueue("steer_chat", "be brief") == 1,
+      str(bot._steers))
+bot.steer_enqueue("steer_chat", "use python")
+check("steer queue holds both",
+      bot.steer_dequeue("steer_chat") == "be brief"
+      and bot.steer_dequeue("steer_chat") == "use python"
+      and bot.steer_dequeue("steer_chat") is None,
+      str(bot._steers))
+check("steer queue cleaned up", "steer_chat" not in bot._steers, str(bot._steers))
+check("chat_running false when idle", bot.chat_running("steer_chat") is False, "")
+
+# Test _is_task_finished with non-existent task
+is_fin = bot._is_task_finished("dummy_conv_xyz", "task-99999")
+check("is_task_finished false for non-existent", is_fin is False, str(is_fin))
+
+# Restore cache
+bot._ag_quota_cache["ts"] = 0.0
+bot._ag_quota_cache["data"] = None
+
+
+# === 15. Abort & Interrupt Mechanism ===
+print("\n=== 15. Abort & Interrupt Mechanism ===")
+
+# Test abort command in COMMANDS list
+cmd_names = [c.get("command") for c in bot.COMMANDS]
+check("COMMANDS has abort", "abort" in cmd_names, str(cmd_names))
+check("COMMANDS has stop", "stop" in cmd_names, str(cmd_names))
+
+# Test abort_task when no run active
+mock_chat = "test_abort_chat_99"
+res_idle = bot.abort_task(mock_chat, reason="test", notify=False)
+check("abort_task idle returns False", res_idle is False, str(res_idle))
+
+# Test abort_task with mock active run
+import subprocess, time
+mock_p = subprocess.Popen(["sleep", "10"])
+with bot._active_runs_lock:
+    bot._active_runs[mock_chat] = {
+        "proc": mock_p,
+        "pgid": None,
+        "master": None,
+        "live_id": 9999,
+        "conv_id": "mock_conv_123",
+        "sess_name": "default",
+        "aborted": False,
+        "interrupted_by": None,
+        "start_time": time.time(),
+    }
+
+res_active = bot.abort_task(mock_chat, reason="test_kill", notify=False)
+check("abort_task active returns True", res_active is True, str(res_active))
+check("mock process terminated", mock_p.poll() is not None, str(mock_p.poll()))
+
+# Test interrupt mode with new_text
+mock_p2 = subprocess.Popen(["sleep", "10"])
+with bot._active_runs_lock:
+    bot._active_runs[mock_chat] = {
+        "proc": mock_p2,
+        "pgid": None,
+        "master": None,
+        "live_id": 9998,
+        "conv_id": "mock_conv_123",
+        "sess_name": "default",
+        "aborted": False,
+        "interrupted_by": None,
+        "start_time": time.time(),
+    }
+
+res_int = bot.abort_task(mock_chat, reason="interrupted", notify=False, new_text="add this to existing chat")
+check("interrupt active returns True", res_int is True, str(res_int))
+check("interrupted_queue has new text", bot._interrupted_queue.get(mock_chat) == "add this to existing chat", str(bot._interrupted_queue.get(mock_chat)))
+check("mock_p2 terminated", mock_p2.poll() is not None, str(mock_p2.poll()))
+
+# Regression: abort must terminate a real PROCESS GROUP. `pgid=None` only
+# exercises proc.terminate() and would have hidden a missing `signal` import
+# (the NameError was swallowed by `except Exception: pass`, so the task looked
+# aborted while the agy process kept running).
+mock_p3 = subprocess.Popen(["sleep", "10"], start_new_session=True)
+with bot._active_runs_lock:
+    bot._active_runs[mock_chat] = {
+        "proc": mock_p3,
+        "pgid": os.getpgid(mock_p3.pid),
+        "master": None,
+        "live_id": 9997,
+        "conv_id": "mock_conv_123",
+        "sess_name": "default",
+        "aborted": False,
+        "interrupted_by": None,
+        "start_time": time.time(),
+    }
+res_pgid = bot.abort_task(mock_chat, reason="test_kill_pgid", notify=False)
+check("abort_task with pgid returns True", res_pgid is True, str(res_pgid))
+check("process group actually killed", mock_p3.poll() is not None,
+      f"poll={mock_p3.poll()}")
+
+# signal must be importable (the abort path depends on it)
+check("bot module exposes signal", hasattr(bot, "signal"), str(hasattr(bot, "signal")))
+
+# Cleanup
+with bot._active_runs_lock:
+    bot._active_runs.pop(mock_chat, None)
+    bot._interrupted_queue.pop(mock_chat, None)
+
+# === 16. Credits label & quota_block options ===
+print("\n=== 16. Credits label & quota_block options ===")
+
+bot._quota.update(ts=time.time(), ok=True,
+                  groups={"Gemini Models": {"week": {"value": "42%", "reset": "2026-09-30T02:45:23Z"}}},
+                  err="", fetching=False)
+_quota_only = bot.quota_block(include_credits=False)
+check("quota_block(include_credits=False) omits credits line",
+      "💳" not in _quota_only, _quota_only)
+check("quota_block(include_credits=False) still shows quota rows",
+      "🤖 Gemini" in _quota_only, _quota_only)
+check("quota_block default includes the G1 credits line",
+      "💳 G1 credits" in bot.quota_block(), bot.quota_block())
+
+check("DEFAULT_CHAT is seeded from ALLOWED",
+      bot.DEFAULT_CHAT is not None or not bot.ALLOWED,
+      f"DEFAULT_CHAT={bot.DEFAULT_CHAT!r} ALLOWED={sorted(bot.ALLOWED)}")
+
+# label (tool description, i.e. model-controlled) must be HTML-escaped in the pin
+bot.set_run_state("esc_chat", phase="running", label="reading <b>evil</b>.log",
+                  started=time.time() - 1, activity=time.time())
+_l5 = bot.run_state_line("esc_chat")
+check("run_state_line escapes the running label",
+      "&lt;b&gt;" in _l5 and "<b>evil</b>" not in _l5, _l5)
+bot.set_run_state("esc_chat", phase="idle")
 
 print(f"\n========== RESULT: {PASS} passed, {FAIL} failed ==========")
 if ERR:

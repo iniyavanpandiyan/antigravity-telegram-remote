@@ -213,7 +213,7 @@ never persisted to the DB. The bridge captures those deltas in memory (`reasonin
 python3 test_render.py
 ```
 
-Expected: **140/140 green** (`test_render.py` covers the markdown/HTML rendering helpers —
+Expected: **132/132 green** (`test_render.py` covers the markdown/HTML rendering helpers —
 `_md_send` / `_md_edit`, the `_html_safe_chunks` / table handling — plus the quota
 dashboard, run-state line, `/steer` queue and the abort path). It `import`s `bot`
 directly, so run it from the repo root.
@@ -258,8 +258,8 @@ re-run `/pin` in that chat.
 | File | Purpose |
 |---|---|
 | `bot.py` | The bridge (entry point, run by the systemd service). ~2,900 lines. |
-| `ide_preview.py` | IDE-session preview helper (`ide_preview`), imported by `bot.py`. |
-| `test_render.py` | Test suite for the render/forward/feature paths (140 cases). |
+| `ide_preview.py` | Standalone CLI helper: `python3 ide_preview.py <conv_id>` dumps a conversation preview. |
+| `test_render.py` | Test suite for the render/forward/feature paths (132 cases). |
 | `requirements.txt` | Python dependencies (`requests`). |
 | `config.json` | Configuration — your bot token. **Git-ignored.** |
 | `antigravity.db` | Bridge state (SQLite). **Git-ignored.** |

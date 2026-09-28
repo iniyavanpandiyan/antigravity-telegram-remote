@@ -343,47 +343,6 @@ check("relative time 2d 3h", any(m in rel_2d for m in ("2d 3h", "2d 2h")), rel_2
 check("relative time empty", bot._format_relative_time("") == "", "empty")
 check("relative time past", bot._format_relative_time((now_utc - datetime.timedelta(minutes=5)).isoformat()) == "ready", "ready")
 
-# Test mock quota parsing
-mock_quota_data = {
-    "response": {
-        "groups": [
-            {
-                "displayName": "Gemini Models",
-                "description": "Rate limits for Gemini",
-                "buckets": [
-                    {"window": "5h", "remainingFraction": 0.85, "resetTime": t_future_1h},
-                    {"window": "Weekly", "remainingFraction": 0.42, "resetTime": t_future_2d}
-                ]
-            },
-            {
-                "displayName": "Claude & GPT",
-                "description": "Rate limits for 3P",
-                "buckets": [
-                    {"window": "5h", "remainingFraction": 1.0, "resetTime": t_future_1h},
-                    {"window": "Weekly", "remainingFraction": 0.60, "resetTime": t_future_2d}
-                ]
-            }
-        ]
-    }
-}
-
-# Cache mock data to test formatting
-bot._ag_quota_cache["ts"] = 9999999999.0
-bot._ag_quota_cache["data"] = mock_quota_data
-
-q_line = bot._get_ag_quota_line()
-check("quota line contains Gemini", "Gemini" in q_line, q_line)
-check("quota line contains 5h", "85% (5h)" in q_line, q_line)
-check("quota line contains Wk", "42% (Wk)" in q_line, q_line)
-check("quota line contains 3P", "3P" in q_line, q_line)
-
-# Test detailed quota message formatting
-det_msg = bot.format_detailed_quota_msg(mock_quota_data)
-check("detailed msg title", "Antigravity Quotas (AG Usage)" in det_msg, det_msg)
-check("detailed msg Gemini", "Gemini Models" in det_msg, det_msg)
-check("detailed msg Claude", "Claude & GPT" in det_msg, det_msg)
-check("detailed msg reset info", "resets in" in det_msg, det_msg)
-
 # Test status_text carries the persistent quota dashboard (it now lives in the
 # pinned message instead of behind /quota and /usage)
 bot._quota.update(ts=bot.time.time(), ok=True, err="", fetching=False,
@@ -479,11 +438,6 @@ check("chat_running false when idle", bot.chat_running("steer_chat") is False, "
 # Test _is_task_finished with non-existent task
 is_fin = bot._is_task_finished("dummy_conv_xyz", "task-99999")
 check("is_task_finished false for non-existent", is_fin is False, str(is_fin))
-
-# Restore cache
-bot._ag_quota_cache["ts"] = 0.0
-bot._ag_quota_cache["data"] = None
-
 
 # === 15. Abort & Interrupt Mechanism ===
 print("\n=== 15. Abort & Interrupt Mechanism ===")

@@ -18,13 +18,7 @@ near-realtime agent experience with:
 
 Dedicated bot (@antigravityfiip_bot), polled via getUpdates (message + callback_query).
 """
-import os, sys, json, sqlite3, subprocess, threading, time, shutil, re, pty, select, signal, unicodedata, ssl, http.client
-from collections import Counter
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-from ide_preview import ide_preview
+import os, sys, json, sqlite3, subprocess, threading, time, shutil, re, pty, select, signal
 
 def import_reply(name, ide_id):
     """Concise success note for an IDE import (no long context dump)."""
@@ -104,9 +98,6 @@ def get_models():
         _cached_models = models
         _cached_models_ts = now
         return list(_cached_models)
-
-MODELS = get_models()
-MODEL_NAMES = {m[0]: m[1] for m in MODELS}
 
 def get_model_name(mid):
     names = {m[0]: m[1] for m in get_models()}
@@ -366,10 +357,6 @@ def _inline_md(s):
     s = re.sub(r"\x00(\d+)\x00", lambda m: f"<code>{_h(code_spans[int(m.group(1))])}</code>", s)
     return s
 
-def _strip_tags(t):
-    """Remove inline HTML tags/code markers for width measurement."""
-    return re.sub(r"<[^>]+>", "", t or "")
-
 def _render_table(rows):
     """Render a markdown table (list of lists) as a Telegram native rich HTML table.
 
@@ -439,7 +426,6 @@ def md_to_html(md):
         mh = _md_head.match(line)
         if mh:
             close_lists()
-            level = len(mh.group(1))
             title = _inline_md(mh.group(2))
             if out and out[-1] != "":
                 out.append("")
@@ -940,9 +926,6 @@ def transcribe_voice(path):
 # flip the meta source 1 -> 17; agy then uses its own managed PTY shell and the
 # bridge's run_command steps work. History is shared (same conversation_id), so
 # Telegram and the IDE still share one thread.
-def ide_link_path(ide_id):
-    return os.path.join(CLI_CONV_DIR, f"{ide_id}.db")
-
 def ensure_ide_link(ide_id):
     """Unified-store bridge (see CLI_CONV_DIR symlink above).
 
@@ -1411,76 +1394,6 @@ def _get_system_usage():
     return res
 
 
-# ---- AG Usage Quota Integration (crsx.ag-usage) ----
-_ag_quota_cache = {"ts": 0.0, "data": None}
-
-def get_ag_quota_summary():
-    """Query Antigravity language_server for User Quota Summary (5h and weekly limits).
-    Matches crsx.ag-usage extension:
-    POST /exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
-    Cached for 15s to avoid excess calls.
-    """
-    now = time.time()
-    if now - _ag_quota_cache["ts"] < 15.0 and _ag_quota_cache["data"] is not None:
-        return _ag_quota_cache["data"]
-
-    try:
-        ps = subprocess.run(["ps", "auxww"], capture_output=True, text=True, timeout=2).stdout
-        ss_out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=2).stdout
-
-        ls_line = next((l for l in ps.splitlines() if "language_server" in l and "--csrf_token" in l), "")
-        csrf = (re.search(r"--csrf_token\s+(\S+)", ls_line) or [None, None])[1]
-
-        pid = None
-        for l in ps.splitlines():
-            if "language_server" in l and "--csrf_token" in l:
-                pm = re.match(r"\S+\s+(\d+)\s", l)
-                if pm:
-                    pid = int(pm.group(1))
-                    break
-
-        if not (pid and csrf):
-            return None
-
-        ports = []
-        for l in ss_out.splitlines():
-            if f"pid={pid}" in l:
-                m = re.search(r":(\d+)\s", l)
-                if m:
-                    ports.append(int(m.group(1)))
-
-        for port in ports:
-            for proto in ["http", "https"]:
-                try:
-                    if proto == "https":
-                        c = ssl.create_default_context()
-                        c.check_hostname = False
-                        c.verify_mode = ssl.CERT_NONE
-                        conn = http.client.HTTPSConnection("127.0.0.1", port, context=c, timeout=2)
-                    else:
-                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                    conn.request(
-                        "POST",
-                        "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
-                        body=b"{}",
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-Codeium-Csrf-Token": csrf,
-                            "Connect-Protocol-Version": "1",
-                        },
-                    )
-                    r = conn.getresponse()
-                    if r.status == 200:
-                        res = json.loads(r.read().decode())
-                        _ag_quota_cache["ts"] = now
-                        _ag_quota_cache["data"] = res
-                        return res
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return None
-
 def _format_relative_time(iso_str):
     if not iso_str:
         return ""
@@ -1505,63 +1418,6 @@ def _format_relative_time(iso_str):
     except Exception:
         return ""
 
-def _get_ag_quota_line():
-    """One-line summary of 5h and weekly quota for the pinned status message."""
-    data = get_ag_quota_summary()
-    if not data:
-        return ""
-    groups = data.get("response", {}).get("groups", [])
-    parts = []
-    for g in groups:
-        name = g.get("displayName", "")
-        short_name = "Gemini" if "gemini" in name.lower() else "3P"
-        b_parts = []
-        for b in g.get("buckets", []):
-            w = b.get("window", "").lower()
-            rem = b.get("remainingFraction")
-            if rem is not None:
-                pct = round(rem * 100)
-                tag = "5h" if "5h" in w else "Wk"
-                b_parts.append(f"{pct}% ({tag})")
-        if b_parts:
-            parts.append(f"{short_name} " + " · ".join(b_parts))
-    return ("⚡ Quota: " + " | ".join(parts)) if parts else ""
-
-def format_detailed_quota_msg(data, chat_id=None):
-    """Rich breakdown for /quota and /usage commands."""
-    lines = ["📊 <b>Antigravity Quotas (AG Usage)</b>\n"]
-    if data and data.get("response"):
-        groups = data.get("response", {}).get("groups", [])
-        for g in groups:
-            name = g.get("displayName", "")
-            desc = g.get("description", "")
-            icon = "🤖" if "gemini" in name.lower() else "🧠"
-            lines.append(f"{icon} <b>{name}</b>\n<i>{_h(desc)}</i>")
-            for b in g.get("buckets", []):
-                dname = b.get("displayName", b.get("window", ""))
-                rem = b.get("remainingFraction", 0.0)
-                pct = round(rem * 100)
-                reset_time = b.get("resetTime")
-                rel = _format_relative_time(reset_time)
-                reset_str = f" · resets in {rel}" if rel else ""
-                lines.append(f"  • <b>{dname}</b>: <b>{pct}%</b> remaining{reset_str}")
-            lines.append("")
-    else:
-        lines.append("⚠️ <i>Could not connect to Antigravity IDE server quota API.</i>\n")
-
-    # Include session token context if chat_id provided
-    if chat_id:
-        s = get_session(chat_id)
-        u_line = _get_session_usage_line(chat_id, s)
-        if u_line:
-            lines.append(f"<b>Active Session Context</b>:\n{u_line}\n")
-
-    # Include system resources
-    sys_u = _get_system_usage()
-    if sys_u:
-        lines.append(f"<b>System Load</b>:\n{sys_u}")
-
-    return "\n".join(lines).strip()
 
 # ---- AI credits: the agy CLI's "Use AI Credits" (useG1Credits) toggle ----
 # This is exactly the setting the agy `/settings` panel persists, so flipping
@@ -2190,14 +2046,14 @@ def _watch_task_and_resume(chat_id, sess_name, conv_id, task_ids):
                 break
             elapsed = int(time.time() - start_t)
             update_pin(chat_id, f"⏳ Waiting for task ({tid_disp}) to finish ({elapsed}s)…")
-            
+
             # Check if all tasks are finished
             all_done = True
             for tid in task_ids:
                 if not _is_task_finished(conv_id, tid):
                     all_done = False
                     break
-            
+
             if all_done:
                 if wait_mid:
                     try: tg("deleteMessage", chat_id=chat_id, message_id=wait_mid)
@@ -2373,7 +2229,6 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
     _prog = {"state": "⏳ Working…", "last": 0.0, "pin_last": 0.0}
 
     def _set_state(st):
-        nonlocal live_id
         _prog["state"] = st
         now = time.time()
         set_run_state(chat_id, activity=now, label=st)
@@ -2401,7 +2256,6 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
             pass
 
     _STREAM_EDIT_LIMIT = 3900  # safely under Telegram's 4096 editMessageText limit
-    _stream_overflow = []      # message_ids of overflow chunks sent after edit limit hit
 
     def stream(t):
         nonlocal answer_id, last_edit, live_id, live_text
@@ -2559,8 +2413,6 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
                         else:
                             final = res.get("response")
                             u = res.get("usage") or {}
-                            if u.get("thinking_tokens"):
-                                think_total = int(u["thinking_tokens"])
                             in_tok = int(u.get("input_tokens") or 0)
                             out_tok = int(u.get("output_tokens") or 0)
                             tot_tok = int(u.get("total_tokens") or (in_tok + out_tok))
@@ -2615,8 +2467,6 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
             else:
                 final = res.get("response")
                 u = res.get("usage") or {}
-                if u.get("thinking_tokens"):
-                    think_total = int(u["thinking_tokens"])
                 in_tok = int(u.get("input_tokens") or 0)
                 out_tok = int(u.get("output_tokens") or 0)
                 tot_tok = int(u.get("total_tokens") or (in_tok + out_tok))
@@ -2761,15 +2611,6 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
                 pass
             live_id = None
 
-    # Clean up any overflow messages sent during streaming (they're now superseded
-    # by the final rendered answer below).
-    for ov_id in _stream_overflow:
-        try:
-            tg("deleteMessage", chat_id=chat_id, message_id=ov_id)
-        except Exception:
-            pass
-    _stream_overflow.clear()
-
     # Deliver final answer at the bottom:
     # If tools ran and answer_id was never allocated (e.g. no post-tool streaming),
     # answer_id is None, so all chunks are sent fresh via send_long BELOW the tools.
@@ -2843,7 +2684,7 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
         for tm in t_matches:
             if tm not in _pending_tasks:
                 _pending_tasks.append(tm)
-        
+
         waiting_patterns = [
             r"will wait for (?:it|the command|the task)",
             r"launched the command and will wait",
@@ -2853,7 +2694,7 @@ def _run_inner(chat_id, text, s, cmd, cwd, stop_typing):
             r"sent to the background as a task",
         ]
         is_waiting = any(re.search(p, answer, re.I) for p in waiting_patterns)
-        
+
         # If pending tasks found or waiting indicated, start background watcher to deliver final answer
         if _pending_tasks or is_waiting:
             # If no explicit task ID found, find latest task in brain tasks dir
@@ -3089,7 +2930,6 @@ def _render_tool(chat_id, su, tool_seen):
             if any(k in out for k in ("Traceback", "Error", "error")) and len(out) < 600:
                 send_long(chat_id, f"⚠️ <pre><code>{_h(out)}</code></pre>")
             return
-
 
 
 # ---- pickers ----
